@@ -1,0 +1,126 @@
+module cpu(input clk_in, input reset);
+	wire clk = clk_in;
+	wire pll_locked;
+	/*
+	pll pll_inst (
+		.areset (1'b0),
+        .inclk0(clk_in),
+        .c0(clk),  // Output to CPU and RAM
+        .locked(pll_locked)
+    );
+	*/
+	reg  [31:0] mem_addr = 0;
+	reg  [31:0] to_ram = 0;
+	wire [31:0] to_cpu;
+	reg we = 0;    
+    ram ram_inst (
+        .address(mem_addr[11:2]), //1024 depth
+        .clock(clk),
+        .data(to_ram),
+        .rden (1'b1),
+        .wren(we),
+        .q(to_cpu)
+    );
+	
+	reg[31:0] instr = 0;
+	reg[31:0] pc = 0;
+	reg jmpfix = 0;
+	reg adr_ld = 1;
+
+	reg[31:0] regfile [0:15];
+	reg f_inst_data = 1;
+
+	integer i;
+	initial begin
+		we = 0;
+		to_ram = 0;
+		mem_addr = 0;
+		for(i = 0; i < 16; i = i + 1) 
+			regfile[i] = 0;
+	end
+	
+
+	localparam [6:0]     
+	LOAD   = 7'b0000011, 
+	STORE  = 7'b0100011;
+	
+	localparam [2:0]     
+	SET_RD_INT = 3'b001, 
+	SET_RD_JAL = 3'b010,
+	SET_RD_ST  = 3'b100; 
+	
+	//instr
+	wire [6:0]  opcode = instr[6:0];
+	wire [2:0]  funct3 = instr[14:12];
+	wire [3:0]  rs1    = instr[18:15];
+	wire [3:0]  rs2    = instr[23:20];
+	wire [3:0]  rd     = instr[10:7];
+	wire [11:0] imm_i  = instr[31:20];
+	wire [11:0] imm_s  = {instr[31:25], instr[11:7]};
+	wire [12:0] imm_b  = {instr[31], instr[7], instr[30:25], instr[11:8], 1'b0};
+	wire [19:0] imm_u  = instr[31:12];
+	wire [20:0] imm_j  = {instr[31], instr[19:12], instr[20], instr[30:21], 1'b0};	
+
+	wire [2:0] set_rd;
+	assign set_rd[2] = 0;
+
+	wire [31:0] r1 = regfile[rs1];
+	wire [31:0] r2 = regfile[rs2];
+
+	wire [31:0] alu_out;
+	alu alu_inst(opcode, funct3, r1, r2, imm_i, pc, imm_u, alu_out, set_rd[0]);
+
+	wire jmp;
+	wire [31:0] pc_out;
+	jump_branch increment_pc(opcode, imm_b, alu_out[0], pc, r1, imm_j, mem_addr, pc_out, set_rd[1], jmp);
+
+	//wire [31:0] ls_out;
+	//load_store ld_st (opcode, funct3, r1, r2, to_cpu, imm_i, imm_s, f_inst_data, ls_out, set_rd[3]);
+
+	always @ (posedge clk) begin
+		if (~reset) begin
+			
+			
+			mem_addr <= pc_out;
+			pc <= mem_addr;
+			instr <= to_cpu;
+
+
+/*
+			if(jmpfix | jmp) begin
+				pc    	 <= 0;
+				instr 	 <= 0;
+				jmpfix = ~ jmpfix;
+			end else begin
+				pc    	 <= addr_in;
+				instr 	 <= to_cpu;
+			end
+		*/	
+
+
+			case(set_rd) 
+				SET_RD_INT : regfile[rd] <= alu_out; 
+				SET_RD_JAL : regfile[rd] <= pc_out + 4;   
+			endcase
+	
+		/*
+			case(opcode)
+				LOAD : begin
+					to_ram    <= ls_out ;
+					f_inst_data <= ~f_inst_data;
+				end
+				STORE: begin
+					regfile[rd] <= to_cpu;
+					f_inst_data <= ~f_inst_data;
+				end
+			endcase
+			*/
+	    end 
+	    
+	    else begin
+	    	pc <= 0; instr <= 0;
+	    	for(i = 0; i < 16; i = i + 1) regfile[i] <= 0;
+	    end
+	end
+endmodule
+	
